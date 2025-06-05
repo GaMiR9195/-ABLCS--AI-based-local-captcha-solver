@@ -4,7 +4,7 @@ A lightweight implementation of Qwen2.5-VL-7B-Instruct multimodal model for simp
 
 ## Overview
 
-This project provides a simple HTTP API wrapper around the Qwen2.5-VL-7B-Instruct vision-language model, enabling easy integration of advanced image analysis capabilities into your applications.
+This project provides a simple HTTP API wrapper around the Qwen2.5-VL-7B-Instruct vision-language model, allowing you to make image -> text requests.
 
 > **⚠️ Educational Purpose Only** - This implementation is intended for learning and experimentation. Not recommended for production use.
 
