@@ -10,6 +10,7 @@ This project provides a simple HTTP API wrapper around the Qwen2.5-VL-7B-Instruc
 
 ## Requirements
 
+- Git (https://git-scm.com/downloads/win)
 - CUDA TOOKIT (https://developer.nvidia.com/cuda-downloads?target_os=Windows)
 - Python 3.10.11 (optional)
 - CUDA-capable GPU (10GB+ VRAM recommended)
