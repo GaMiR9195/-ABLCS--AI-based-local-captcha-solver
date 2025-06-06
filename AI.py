@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from qwen_vl_utils import process_vision_info
+from Improver import improve_image
 
 class ImageAnalysisRequest(BaseModel):
     image_base64: str
@@ -79,7 +80,7 @@ class QwenGPUAPI:
         gpu_memory = torch.cuda.get_device_properties(0).total_memory
 
         gpu_limit_gb = round(gpu_memory * 0.65 / (1024**3), 1)
-        cpu_limit_gb = round(cpu_memory * 0.50 / (1024**3), 1)
+        cpu_limit_gb = round(cpu_memory * 0.55 / (1024**3), 1)
 
         print(f"GPU memory limit: {gpu_limit_gb}GB of {gpu_memory/(1024**3):.1f}GB")
         print(f"CPU memory limit: {cpu_limit_gb}GB of {cpu_memory/(1024**3):.1f}GB")
@@ -96,7 +97,7 @@ class QwenGPUAPI:
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             str(self.model_dir),
             quantization_config=bnb_config,
-            device_map="auto",
+            device_map="balanced",
             max_memory={
                 0: f"{gpu_limit_gb}GB",
                 "cpu": f"{cpu_limit_gb}GB"
@@ -174,6 +175,9 @@ class QwenGPUAPI:
     def _process_image_sync(self, image_data, custom_prompt):
         try:
             image = self._decode_image(image_data)
+
+            image = improve_image(image, for_vision_model=True)
+
             prompt = custom_prompt if custom_prompt else self._get_prompt()
 
             messages = [
@@ -209,7 +213,6 @@ class QwenGPUAPI:
                     **inputs,
                     max_new_tokens=1024,
                     do_sample=False,
-                    temperature=0.1,
                     pad_token_id=self.processor.tokenizer.pad_token_id
                 )
 
