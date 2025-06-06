@@ -35,7 +35,7 @@ if "%choice%"=="1" (
 
 echo torch^>=2.3.0 >> requirements_temp.txt
 echo torchvision^>=0.18.0 >> requirements_temp.txt
-echo transformers^>=4.49.0 >> requirements_temp.txt
+echo transformers @ git+https://github.com/huggingface/transformers.git@f3f6c86582611976e72be054675e2bf0abb5f775 >> requirements_temp.txt
 echo accelerate^>=0.33.0 >> requirements_temp.txt
 echo bitsandbytes^>=0.43.0 >> requirements_temp.txt
 echo huggingface-hub^>=0.24.0 >> requirements_temp.txt

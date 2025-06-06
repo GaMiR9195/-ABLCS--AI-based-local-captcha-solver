@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 import torch
 import json
 import base64
@@ -15,6 +16,7 @@ import uvicorn
 from pydantic import BaseModel
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
+from qwen_vl_utils import process_vision_info
 
 class ImageAnalysisRequest(BaseModel):
     image_base64: str
@@ -25,6 +27,10 @@ class QwenGPUAPI:
         self.model_dir = Path(model_dir)
         self.prompt_file = Path("./prompt.txt")
         
+        self.cached_prompt = None
+        self.prompt_last_modified = None
+        self.prompt_last_checked = None
+
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA not available!")
         
@@ -38,18 +44,18 @@ class QwenGPUAPI:
         self.model = None
         self.processor = None
         self.tokenizer = None
-        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.executor = ThreadPoolExecutor(max_workers=6)
         
         self._ensure_model_downloaded()
         self._load_model()
         
     def _ensure_model_downloaded(self):
         if not self.model_dir.exists() or not any(self.model_dir.iterdir()):
-            print("Downloading Qwen2-VL-7B...")
+            print("DON'T LET IT DOWNLOAD... Downloading Qwen2.5-VL-7B...")
             self.model_dir.mkdir(parents=True, exist_ok=True)
             
             snapshot_download(
-                repo_id="Qwen/Qwen2-VL-7B-Instruct",
+                repo_id="Qwen/Qwen2.5-VL-7B-Instruct",
                 local_dir=str(self.model_dir),
                 local_dir_use_symlinks=False,
                 resume_download=True
@@ -58,52 +64,48 @@ class QwenGPUAPI:
     def _load_model(self):
         print("Loading model with 8-bit quantization and CPU+GPU distribution...")
 
-        # Загружаем токенизатор и процессор
         self.tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
         self.processor = AutoProcessor.from_pretrained(str(self.model_dir))
 
-        # Создаем папку для offload внутри папки модели
+        # Исправление: копируем chat_template из tokenizer в processor
+        if hasattr(self.tokenizer, 'chat_template') and self.tokenizer.chat_template:
+            self.processor.chat_template = self.tokenizer.chat_template
+
         offload_folder = self.model_dir / "offload_cache"
         offload_folder.mkdir(exist_ok=True)
 
-        # Получаем информацию о системе
         import psutil
         cpu_memory = psutil.virtual_memory().total
         gpu_memory = torch.cuda.get_device_properties(0).total_memory
 
-        # Рассчитываем лимиты памяти (в гигабайтах)
-        gpu_limit_gb = round(gpu_memory * 0.75 / (1024**3), 1)  # 75% от GPU памяти
-        cpu_limit_gb = round(cpu_memory * 0.40 / (1024**3), 1)  # 40% от RAM
+        gpu_limit_gb = round(gpu_memory * 0.65 / (1024**3), 1)
+        cpu_limit_gb = round(cpu_memory * 0.50 / (1024**3), 1)
 
         print(f"GPU memory limit: {gpu_limit_gb}GB of {gpu_memory/(1024**3):.1f}GB")
         print(f"CPU memory limit: {cpu_limit_gb}GB of {cpu_memory/(1024**3):.1f}GB")
         print(f"Offload folder: {offload_folder}")
 
-        # Конфигурация 8-bit квантизации
         from transformers import BitsAndBytesConfig
         bnb_config = BitsAndBytesConfig(
-            load_in_8bit=True,
-            bnb_8bit_compute_dtype=torch.float16,
-            bnb_8bit_use_double_quant=False,
-            llm_int8_enable_fp32_cpu_offload=True,
-            llm_int8_threshold=6.0
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
         )
 
-        # Загружаем модель с распределением
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             str(self.model_dir),
             quantization_config=bnb_config,
             device_map="auto",
             max_memory={
-                0: f"{gpu_limit_gb}GB",      # Лимит для GPU в GB
-                "cpu": f"{cpu_limit_gb}GB"   # Лимит для CPU в GB
+                0: f"{gpu_limit_gb}GB",
+                "cpu": f"{cpu_limit_gb}GB"
             },
             offload_folder=str(offload_folder),
             offload_state_dict=True,
             trust_remote_code=True
         ).eval()
 
-        # Показываем распределение слоёв
         print("\nModel distribution:")
         if hasattr(self.model, 'hf_device_map'):
             gpu_layers = sum(1 for d in self.model.hf_device_map.values() if d == 0)
@@ -113,18 +115,14 @@ class QwenGPUAPI:
             print(f"  Layers on CPU: {cpu_layers}")
             print(f"  Layers on Disk: {disk_layers}")
 
-        # Информация о текущем использовании памяти
         print(f"\nActual GPU memory used: {torch.cuda.memory_allocated()/(1024**3):.2f}GB")
         print(f"Actual CPU memory used: {psutil.Process().memory_info().rss/(1024**3):.2f}GB")
 
-        # Размер offload папки
         offload_size = sum(f.stat().st_size for f in offload_folder.glob('*') if f.is_file())
         if offload_size > 0:
             print(f"Offload folder size: {offload_size/(1024**3):.2f}GB")
 
-        # Очищаем кэш GPU
         torch.cuda.empty_cache()
-
         print("Model loaded successfully with 8-bit quantization!")
     
     def _load_prompt(self):
@@ -136,7 +134,35 @@ class QwenGPUAPI:
         with open(self.prompt_file, 'w', encoding='utf-8') as f:
             f.write(default_prompt)
         return default_prompt
-    
+
+    def _get_prompt(self):
+        """Получает промпт с проверкой изменений файла"""
+        # Проверяем не чаще раза в секунду
+        now = datetime.now()
+        if self.prompt_last_checked and (now - self.prompt_last_checked).seconds < 1:
+            return self.cached_prompt
+        
+        self.prompt_last_checked = now
+        
+        try:
+            current_mtime = os.path.getmtime(self.prompt_file)
+            
+            # Если файл изменился или первая загрузка
+            if self.prompt_last_modified != current_mtime:
+                with open(self.prompt_file, 'r', encoding='utf-8') as f:
+                    self.cached_prompt = f.read().strip()
+                self.prompt_last_modified = current_mtime
+                print(f"Prompt reloaded: {self.cached_prompt[:50]}...")
+                
+        except FileNotFoundError:
+            # Создаем файл с дефолтным промптом
+            self.cached_prompt = "Extract all text from this image accurately and completely."
+            with open(self.prompt_file, 'w', encoding='utf-8') as f:
+                f.write(self.cached_prompt)
+            self.prompt_last_modified = os.path.getmtime(self.prompt_file)
+        
+        return self.cached_prompt
+
     def _decode_image(self, image_data):
         if isinstance(image_data, str):
             image_bytes = base64.b64decode(image_data)
@@ -148,11 +174,11 @@ class QwenGPUAPI:
     def _process_image_sync(self, image_data, custom_prompt):
         try:
             image = self._decode_image(image_data)
-            prompt = custom_prompt if custom_prompt else self._load_prompt()
-            
+            prompt = custom_prompt if custom_prompt else self._get_prompt()
+
             messages = [
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": [
                         {"type": "image", "image": image},
                         {"type": "text", "text": prompt}
@@ -160,46 +186,59 @@ class QwenGPUAPI:
                 }
             ]
             
-            text_prompt = self.processor.apply_chat_template(
+            text = self.processor.apply_chat_template(
                 messages, 
-                add_generation_prompt=True, 
-                tokenize=False
+                tokenize=False, 
+                add_generation_prompt=True
             )
             
+            image_inputs, video_inputs = process_vision_info(messages)
+            
             inputs = self.processor(
-                text=[text_prompt],
-                images=[image],
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
                 padding=True,
                 return_tensors="pt"
-            ).to(self.device)
-            
+            )
+
+            inputs = inputs.to(self.device)
+
             with torch.inference_mode():
                 output_ids = self.model.generate(
                     **inputs,
                     max_new_tokens=1024,
                     do_sample=False,
                     temperature=0.1,
-                    pad_token_id=self.tokenizer.eos_token_id
+                    pad_token_id=self.processor.tokenizer.pad_token_id
                 )
-            
-            generated_ids = output_ids[:, inputs.input_ids.shape[1]:]
+
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, output_ids)
+            ]
+
             response = self.processor.batch_decode(
-                generated_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
+                generated_ids_trimmed, 
+                skip_special_tokens=True, 
+                clean_up_tokenization_spaces=False
             )[0]
-            
+
+            if "Assistant:" in response:
+                response = response.split("Assistant:")[-1].strip()
+
             return {
                 "success": True,
-                "result": response.strip(),
+                "result": response,
                 "prompt_used": prompt,
                 "device": str(self.device)
             }
-            
+
         except Exception as e:
+            import traceback
             return {
                 "success": False,
                 "error": str(e),
+                "traceback": traceback.format_exc(),
                 "device": str(self.device)
             }
     
@@ -214,12 +253,12 @@ class QwenGPUAPI:
         return result
 
 qwen_api = QwenGPUAPI()
-app = FastAPI(title="Qwen2_5-VL GPU API", version="2.0.0")
+app = FastAPI(title="Qwen2.5-VL GPU API", version="2.0.0")
 
 @app.get("/")
 async def root():
     return {
-        "message": "Qwen2_5-VL GPU API Server",
+        "message": "Qwen2.5-VL GPU API Server",
         "status": "running",
         "device": str(qwen_api.device),
         "gpu": torch.cuda.get_device_name(0),
