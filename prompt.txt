@@ -1,0 +1,3 @@
+Extract all text from this image. Be precise and accurate. 
+If you see any structured data like forms, tables, or lists, preserve their format. 
+Return only the text content without additional commentary. 
