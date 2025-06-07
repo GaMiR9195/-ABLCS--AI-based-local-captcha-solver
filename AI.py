@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from qwen_vl_utils import process_vision_info
-from Improver import improve_image
+# from Improver import wavelet_text_enhancement
 
 class ImageAnalysisRequest(BaseModel):
     image_base64: str
@@ -63,7 +63,7 @@ class QwenGPUAPI:
             )
     
     def _load_model(self):
-        print("Loading model with 8-bit quantization and CPU+GPU distribution...")
+        print("Loading model with 4-bit quantization and CPU+GPU distribution...")
 
         self.tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
         self.processor = AutoProcessor.from_pretrained(str(self.model_dir))
@@ -176,7 +176,7 @@ class QwenGPUAPI:
         try:
             image = self._decode_image(image_data)
 
-            image = improve_image(image, for_vision_model=True)
+            # image = wavelet_text_enhancement(image)
 
             prompt = custom_prompt if custom_prompt else self._get_prompt()
 

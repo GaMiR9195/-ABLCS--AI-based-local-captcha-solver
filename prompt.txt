@@ -1,0 +1,1 @@
+Captcha solving, extract text without answer & without spaces, use max of your vision.

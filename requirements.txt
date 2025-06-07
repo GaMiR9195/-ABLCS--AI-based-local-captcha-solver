@@ -1,0 +1,19 @@
+torch>=2.3.0
+torchvision>=0.18.0
+transformers @ git+https://github.com/huggingface/transformers.git@f3f6c86582611976e72be054675e2bf0abb5f775
+accelerate>=0.33.0
+bitsandbytes>=0.43.0
+huggingface-hub>=0.24.0
+fastapi>=0.111.0
+uvicorn>=0.30.0
+pillow>=10.4.0
+python-multipart>=0.0.9
+pydantic>=2.8.0
+qwen-vl-utils>=0.0.8
+psutil>=7.0.0
+opencv-python>=4.11.0
+scikit-image>=0.25.2
+PyWavelets>=1.8.0
+matplotlib>=3.10.3
+opencv-contrib-python>=4.11.0.86
+opencv-python-headless>=4.11.0.86
