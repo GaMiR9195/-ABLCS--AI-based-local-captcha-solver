@@ -1,4 +1,4 @@
-# Qwen2.5-VL-7B Vision (Captcha Solver) API [IN PROGRESS]
+# Qwen2.5-VL-7B Vision (Captcha Solver) API without enchanting images
 
 A lightweight implementation of Qwen2.5-VL-7B-Instruct multimodal model for simple captcha solving tasks (EDUCATION ONLY).
 
