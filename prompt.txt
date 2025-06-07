@@ -1,2 +1,0 @@
-Extract all text from this image without spaces. Be precise and accurate. 
-Return only the text content without additional commentary.
